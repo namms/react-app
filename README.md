@@ -1,169 +1,193 @@
-Below is the **complete, production-ready folder structure + all working files** for your React app using:
 
-* PrimeReact MegaMenu
-* React Router v6
-* React Query
-* JWT returned from API
-* Client-side decoding
-* Full route protection
-* Dynamic MegaMenu based on permissions
 
-This is **copy-paste ready**.
+   ```json
+   {
+     "username": "john",
+     "permissions": ["view_dashboard", "view_reports"],
+     "group": "admin"
+   }
+   ```
+3. Frontend stores this **decoded info only** in Redux.
 
----
-
-# 📁 **FINAL FOLDER STRUCTURE (recommended)**
-
-```
-src/
-│
-├── App.tsx
-├── AppRoutes.tsx
-│
-├── context/
-│   └── AuthContext.tsx
-│
-├── layout/
-│   ├── AppLayout.tsx
-│   └── AppHeader.tsx
-│
-├── components/
-│   └── ProtectedRoute.tsx
-│
-├── config/
-│   └── menuConfig.ts
-│
-├── pages/
-│   ├── LoginPage.tsx
-│   ├── DashboardPage.tsx
-│   └── AccessoriesPage.tsx
-│
-└── services/
-    └── authService.ts
-```
+This is the safest and most correct method.
 
 ---
 
-# ✅ **1. App.tsx**
+# ✅ 1. **Redux Toolkit Auth Slice**
 
-```tsx
-import { BrowserRouter } from "react-router-dom";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { AuthProvider } from "./context/AuthContext";
-import { AppRoutes } from "./AppRoutes";
+**src/store/authSlice.ts**
 
-const queryClient = new QueryClient();
+```ts
+import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
+import axios from "../utils/axios";
 
-export function App() {
-  return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <AuthProvider>
-          <AppRoutes />
-        </AuthProvider>
-      </BrowserRouter>
-    </QueryClientProvider>
-  );
+export interface AuthState {
+  username: string | null;
+  permissions: string[];
+  group: string | null;
+  loading: boolean;
+  isAuthenticated: boolean;
 }
 
-export default App;
-```
-
----
-
-# ✅ **2. AppRoutes.tsx**
-
-```tsx
-import { Routes, Route } from "react-router-dom";
-import ProtectedRoute from "./components/ProtectedRoute";
-import AppLayout from "./layout/AppLayout";
-import LoginPage from "./pages/LoginPage";
-
-export function AppRoutes() {
-  return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
-
-      {/* Everything else is protected */}
-      <Route
-        path="/*"
-        element={
-          <ProtectedRoute>
-            <AppLayout />
-          </ProtectedRoute>
-        }
-      />
-    </Routes>
-  );
-}
-```
-
----
-
-# ✅ **3. AuthContext.tsx** (decodes JWT client-side)
-
-```tsx
-import { createContext, useContext, useState, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
-import jwtDecode from "jwt-decode";
-import { getJwtToken } from "../services/authService";
-
-const AuthContext = createContext(null);
-
-export const AuthProvider = ({ children }) => {
-  const [auth, setAuth] = useState({
-    token: null,
-    permissions: [],
-    username: "",
-    group: ""
-  });
-
-  const { data, isLoading } = useQuery({
-    queryKey: ["jwtToken"],
-    queryFn: getJwtToken
-  });
-
-  useEffect(() => {
-    if (data?.token) {
-      const decoded = jwtDecode(data.token);
-
-      setAuth({
-        token: data.token,
-        permissions: decoded.permissions || [],
-        username: decoded.username || "",
-        group: decoded.group || ""
-      });
-    }
-  }, [data]);
-
-  return (
-    <AuthContext.Provider value={{ auth, isLoading }}>
-      {children}
-    </AuthContext.Provider>
-  );
+const initialState: AuthState = {
+  username: null,
+  permissions: [],
+  group: null,
+  loading: true,
+  isAuthenticated: false
 };
 
-export const useAuth = () => useContext(AuthContext);
+// Fetch user info by reading HttpOnly cookie (JWT) on backend
+export const fetchUser = createAsyncThunk(
+  "auth/fetchUser",
+  async (_, { rejectWithValue }) => {
+    try {
+      const res = await axios.get("/auth/me", { withCredentials: true });
+      return res.data;
+    } catch (err: any) {
+      return rejectWithValue(err.response?.data || "Unauthorized");
+    }
+  }
+);
+
+const authSlice = createSlice({
+  name: "auth",
+  initialState,
+  reducers: {
+    clearAuth: (state) => {
+      state.username = null;
+      state.permissions = [];
+      state.group = null;
+      state.isAuthenticated = false;
+    }
+  },
+  extraReducers: (builder) => {
+    builder
+      .addCase(fetchUser.pending, (state) => {
+        state.loading = true;
+      })
+      .addCase(fetchUser.fulfilled, (state, action) => {
+        state.username = action.payload.username;
+        state.permissions = action.payload.permissions;
+        state.group = action.payload.group;
+        state.isAuthenticated = true;
+        state.loading = false;
+      })
+      .addCase(fetchUser.rejected, (state) => {
+        state.loading = false;
+        state.isAuthenticated = false;
+      });
+  }
+});
+
+export const { clearAuth } = authSlice.actions;
+export default authSlice.reducer;
 ```
 
 ---
 
-# ✅ **4. ProtectedRoute.tsx**
+# ✅ 2. **Global Store Setup**
+
+**src/store/store.ts**
+
+```ts
+import { configureStore } from "@reduxjs/toolkit";
+import authReducer from "./authSlice";
+
+export const store = configureStore({
+  reducer: {
+    auth: authReducer
+  }
+});
+
+export type RootState = ReturnType<typeof store.getState>;
+export type AppDispatch = typeof store.dispatch;
+```
+
+---
+
+# ✅ 3. **Axios Instance**
+
+Cookies are automatically included.
+
+**src/utils/axios.ts**
+
+```ts
+import axios from "axios";
+
+const instance = axios.create({
+  baseURL: "https://api.example.com",
+  withCredentials: true // enables HttpOnly Cookie exchange
+});
+
+export default instance;
+```
+
+---
+
+# ✅ 4. **App Initialization (load auth on navigation)**
+
+We load the user **on first render**, BEFORE pages load.
+
+**src/App.tsx**
 
 ```tsx
-import { Navigate, useLocation } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
+import { useEffect } from "react";
+import { useDispatch, useSelector } from "react-redux";
+import { fetchUser } from "./store/authSlice";
+import { RootState } from "./store/store";
+import AppRoutes from "./routes/AppRoutes";
 
-export default function ProtectedRoute({ children }) {
-  const { auth, isLoading } = useAuth();
-  const location = useLocation();
+export default function App() {
+  const dispatch = useDispatch();
+  const loading = useSelector((s: RootState) => s.auth.loading);
 
-  if (isLoading) return <div>Loading...</div>;
+  useEffect(() => {
+    dispatch(fetchUser() as any);
+  }, [dispatch]);
 
-  if (!auth.token) {
-    return (
-      <Navigate to="/login" replace state={{ from: location.pathname }} />
-    );
+  if (loading) return <div>Loading authentication...</div>;
+
+  return <AppRoutes />;
+}
+```
+
+---
+
+# ✅ 5. **Protected Route**
+
+**src/routes/ProtectedRoute.tsx**
+
+```tsx
+import { useSelector } from "react-redux";
+import { RootState } from "../store/store";
+import { Navigate } from "react-router-dom";
+
+export default function ProtectedRoute({ children }: any) {
+  const { isAuthenticated, loading } = useSelector((s: RootState) => s.auth);
+
+  if (loading) return <div>Checking authentication...</div>;
+
+  return isAuthenticated ? children : <Navigate to="/login" replace />;
+}
+```
+
+---
+
+# ✅ 6. **Permission Route**
+
+**src/routes/PermissionRoute.tsx**
+
+```tsx
+import { useSelector } from "react-redux";
+import { Navigate } from "react-router-dom";
+import { RootState } from "../store/store";
+
+export default function PermissionRoute({ children, permission }: any) {
+  const { permissions } = useSelector((s: RootState) => s.auth);
+
+  if (!permissions.includes(permission)) {
+    return <Navigate to="/unauthorized" replace />;
   }
 
   return children;
@@ -172,143 +196,84 @@ export default function ProtectedRoute({ children }) {
 
 ---
 
-# ✅ **5. AppLayout.tsx**
+# ✅ 7. **Route Config w/ Permission-Based Screens**
+
+**src/routes/AppRoutes.tsx**
 
 ```tsx
-import AppHeader from "./AppHeader";
-import { Outlet } from "react-router-dom";
-import DashboardPage from "../pages/DashboardPage";
-import AccessoriesPage from "../pages/AccessoriesPage";
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import ProtectedRoute from "./ProtectedRoute";
+import PermissionRoute from "./PermissionRoute";
 
-export default function AppLayout() {
+import Dashboard from "../pages/Dashboard";
+import Reports from "../pages/Reports";
+import Login from "../pages/Login";
+
+export default function AppRoutes() {
   return (
-    <>
-      <AppHeader />
-      <main className="p-4">
-        <Outlet />
-      </main>
-    </>
+    <BrowserRouter>
+      <Routes>
+
+        <Route path="/login" element={<Login />} />
+
+        <Route
+          path="/dashboard"
+          element={
+            <ProtectedRoute>
+              <PermissionRoute permission="view_dashboard">
+                <Dashboard />
+              </PermissionRoute>
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/reports"
+          element={
+            <ProtectedRoute>
+              <PermissionRoute permission="view_reports">
+                <Reports />
+              </PermissionRoute>
+            </ProtectedRoute>
+          }
+        />
+
+        <Route path="*" element={<ProtectedRoute><div>404</div></ProtectedRoute>} />
+      </Routes>
+    </BrowserRouter>
   );
 }
 ```
 
 ---
 
-# ✅ **6. AppHeader.tsx (PrimeReact MegaMenu)**
+# ✅ 8. **Mega Menu (show only allowed)**
+
+**src/components/MegaMenu.tsx**
 
 ```tsx
-import { MegaMenu } from "primereact/megamenu";
-import { useNavigate } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
-import { MENU_CONFIG } from "../config/menuConfig";
+import { useSelector } from "react-redux";
+import { RootState } from "../store/store";
 
-export default function AppHeader() {
-  const { auth } = useAuth();
-  const navigate = useNavigate();
+export default function MegaMenu() {
+  const { permissions } = useSelector((s: RootState) => s.auth);
 
-  const items = MENU_CONFIG
-    .filter(item => auth.permissions.includes(item.permission))
-    .map(item => ({
-      label: item.label,
-      command: () => navigate(item.path)
-    }));
+  const items = [
+    { label: "Dashboard", permission: "view_dashboard", path: "/dashboard" },
+    { label: "Reports", permission: "view_reports", path: "/reports" },
+    { label: "Admin", permission: "admin_access", path: "/admin" }
+  ];
+
+  const allowed = items.filter(i => permissions.includes(i.permission));
 
   return (
-    <div className="shadow mb-3">
-      <MegaMenu model={items} />
-    </div>
+    <ul>
+      {allowed.map(item => (
+        <li key={item.path}>
+          <a href={item.path}>{item.label}</a>
+        </li>
+      ))}
+    </ul>
   );
 }
 ```
-
----
-
-# ✅ **7. Menu Config**
-
-`menuConfig.ts`
-
-```ts
-export const MENU_CONFIG = [
-  {
-    label: "Dashboard",
-    path: "/dashboard",
-    permission: "view_dashboard"
-  },
-  {
-    label: "Accessories",
-    path: "/furniture/accessories",
-    permission: "view_accessories"
-  }
-];
-```
-
----
-
-# ✅ **8. Auth API (returns ONLY JWT)**
-
-`authService.ts`
-
-```ts
-export async function getJwtToken() {
-  const res = await fetch("/api/auth", {
-    credentials: "include"
-  });
-
-  if (!res.ok) throw new Error("Auth failed");
-
-  return res.json(); // MUST return { token: "..." }
-}
-```
-
----
-
-# ✅ **9. Pages (Examples)**
-
-`LoginPage.tsx`
-
-```tsx
-export default function LoginPage() {
-  return <div>Login Page (implement actual login)</div>;
-}
-```
-
-`DashboardPage.tsx`
-
-```tsx
-export default function DashboardPage() {
-  return <div>Dashboard</div>;
-}
-```
-
-`AccessoriesPage.tsx`
-
-```tsx
-export default function AccessoriesPage() {
-  return <div>Accessories</div>;
-}
-```
-
----
-
-# 🎉 **FINAL BEHAVIOR**
-
-✔ API returns only a JWT
-✔ Client decodes JWT using `jwt-decode`
-✔ Permissions, username, group extracted
-✔ Stored in `AuthContext`
-✔ All routes except `/login` are protected
-✔ MegaMenu shows only allowed items
-✔ Clean folder structure
-✔ Enterprise-level architecture
-
----
-
-If you want, I can also add:
-
-🔹 Auto-refresh JWT
-🔹 Logout functionality
-🔹 Role-based route protection
-🔹 Global 401 handler
-🔹 Loading skeleton UI
-
-Just tell me!
