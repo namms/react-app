@@ -159,17 +159,35 @@ export default function App() {
 **src/routes/ProtectedRoute.tsx**
 
 ```tsx
-import { useSelector } from "react-redux";
-import { RootState } from "../store/store";
-import { Navigate } from "react-router-dom";
+import React from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
+import { useSelector } from 'react-redux';
+import { RootState } from '../store';
+import { UserRole } from '../types';
 
-export default function ProtectedRoute({ children }: any) {
-  const { isAuthenticated, loading } = useSelector((s: RootState) => s.auth);
-
-  if (loading) return <div>Checking authentication...</div>;
-
-  return isAuthenticated ? children : <Navigate to="/login" replace />;
+interface ProtectedRouteProps {
+  children: React.ReactNode;
+  allowedRoles: UserRole[];
 }
+
+const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowedRoles }) => {
+  const { isAuthenticated, user } = useSelector((state: RootState) => state.auth);
+  const location = useLocation();
+
+  if (!isAuthenticated || !user) {
+    // Redirect to login, saving the location they were trying to access
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  if (!allowedRoles.includes(user.role)) {
+    // Redirect to unauthorized page if role doesn't match
+    return <Navigate to="/unauthorized" replace />;
+  }
+
+  return <>{children}</>;
+};
+
+export default ProtectedRoute;
 ```
 
 ---
